@@ -1,11 +1,11 @@
 const ECRecovery = artifacts.require("ECRecovery")
-const Math = artifacts.require("Math")
+const SafeMath = artifacts.require("SafeMath")
 const TicketBroker = artifacts.require("TicketBroker")
 
 module.exports = function(deployer) {
     deployer.deploy(ECRecovery)
     deployer.link(ECRecovery, TicketBroker)
 
-    deployer.deploy(Math)
-    deployer.link(Math, TicketBroker)
+    deployer.deploy(SafeMath)
+    deployer.link(SafeMath, TicketBroker)
 };

@@ -2,12 +2,16 @@ import ethAbi from "ethereumjs-abi"
 import ethUtil from "ethereumjs-util"
 
 const TicketBroker = artifacts.require("TicketBroker")
+const TestToken = artifacts.require("./helpers/TestToken")
 
 contract("TicketBroker", accounts => {
     let broker
+    let token
 
     before(async () => {
-        broker = await TicketBroker.new()
+        const withdrawDelay = 24 * 60 * 60
+        token = await TestToken.new([accounts[0], accounts[1]], 10000)
+        broker = await TicketBroker.new(token.address, withdrawDelay)
     })
 
     describe("claimPayment", () => {
@@ -16,7 +20,8 @@ contract("TicketBroker", accounts => {
 
         it("recipient can claim payment for a winning ticket", async () => {
             // Bob puts funds into deposit and penalty escrow
-            await broker.deposit(1000, 2000, {from: bob, value: 3000})
+            await token.approve(broker.address, 3000, {from: bob})
+            await broker.deposit(1000, 2000, {from: bob})
 
             // Alice chooses random witness
             const rand = Math.trunc(Math.random() * 100000)
@@ -60,9 +65,9 @@ contract("TicketBroker", accounts => {
                 console.log("Wrong creator")
             }
 
-            const deposit = await broker.deposits.call(bob)
+            const startDeposit = (await broker.creators.call(bob))[0]
 
-            if (deposit.toNumber() < ticket.faceValue) {
+            if (startDeposit.toNumber() < ticket.faceValue) {
                 console.log("Insufficient deposit")
             }
 
@@ -70,15 +75,19 @@ contract("TicketBroker", accounts => {
                 console.log("Not a winning ticket")
             }
 
-            const aliceStartBalance = web3.eth.getBalance(alice)
+            const aliceStartBalance = await token.balanceOf(alice)
 
             // Alice signs the winning ticket to claim payment
             const recipientSig = web3.eth.sign(alice, "0x" + ticketHash.toString("hex"))
-            await broker.claimPayment(rand, nonce, faceValue, winProb, alice, recipientSig, creatorSig)
+            await broker.claimPayment(rand, ticket.nonce, ticket.faceValue, ticket.winProb, ticket.recipient, recipientSig, ticket.creatorSig)
 
-            const aliceEndBalance = web3.eth.getBalance(alice)
+            const aliceEndBalance = await token.balanceOf(alice)
 
             assert.equal(aliceEndBalance.sub(aliceStartBalance), 500, "recipient balance updated incorrectly")
+
+            const endDeposit = (await broker.creators.call(bob))[0]
+
+            assert.equal(startDeposit.sub(endDeposit), 500, "deposit updated incorrectly")
         })
     })
 })

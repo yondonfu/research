@@ -1,33 +1,54 @@
 pragma solidity ^0.4.17;
 
 import "zeppelin-solidity/contracts/ECRecovery.sol";
-import "zeppelin-solidity/contracts/math/Math.sol";
+import "zeppelin-solidity/contracts/token/ERC20.sol";
+import "zeppelin-solidity/contracts/math/SafeMath.sol";
 
 
 contract TicketBroker {
+    using SafeMath for uint256;
+
     string constant PERSONAL_HASH_PREFIX = "\u0019Ethereum Signed Message:\n32";
 
-    // Sender deposits
-    mapping (address => uint256) public deposits;
-    // Sender penalty escrows
-    mapping (address => uint256) public penaltyEscrows;
+    ERC20 public token;
 
-    function deposit(uint256 _deposit, uint256 _penaltyEscrow) external payable {
-        require(msg.value == _deposit + _penaltyEscrow);
-        deposits[msg.sender] += _deposit;
-        penaltyEscrows[msg.sender] += _penaltyEscrow;
+    uint256 public withdrawDelay;
+
+    struct Creator {
+        uint256 deposit;
+        uint256 penaltyEscrow;
+        uint256 withdrawTimestamp;
+    }
+
+    mapping (address => Creator) public creators;
+
+    function TicketBroker(address _token, uint256 _withdrawDelay) public {
+        token = ERC20(_token);
+        withdrawDelay = _withdrawDelay;
+    }
+
+    function deposit(uint256 _deposit, uint256 _penaltyEscrow) external {
+        creators[msg.sender].deposit = creators[msg.sender].deposit.add(_deposit);
+        creators[msg.sender].penaltyEscrow = creators[msg.sender].penaltyEscrow.add(_penaltyEscrow);
+        creators[msg.sender].withdrawTimestamp = now.add(withdrawDelay);
+
+        uint256 amount = _deposit.add(_penaltyEscrow);
+        token.transferFrom(msg.sender, this, amount);
     }
 
     function withdraw() external {
-        require(deposits[msg.sender] + penaltyEscrows[msg.sender] > 0);
+        Creator storage creator = creators[msg.sender];
 
-        uint256 amount = deposits[msg.sender];
-        amount += penaltyEscrows[msg.sender];
+        require(creator.withdrawTimestamp >= now);
 
-        deposits[msg.sender] = 0;
-        penaltyEscrows[msg.sender] = 0;
+        uint256 amount = creator.deposit.add(creator.penaltyEscrow);
 
-        msg.sender.transfer(amount);
+        require(amount > 0);
+
+        creator.deposit = 0;
+        creator.penaltyEscrow = 0;
+
+        token.transfer(msg.sender, amount);
     }
 
     /*
@@ -58,20 +79,27 @@ contract TicketBroker {
         require(ECRecovery.recover(personalHashMsg(ticketHash), _recipientSig) == _recipient);
 
         // Recover creator address
-        address creator = ECRecovery.recover(personalHashMsg(ticketHash), _creatorSig);
+        address creatorAddr = ECRecovery.recover(personalHashMsg(ticketHash), _creatorSig);
+
+        Creator storage creator = creators[creatorAddr];
+
         // Check if creator has a penalty escrow
-        require(penaltyEscrows[creator] > 0);
+        require(creator.penaltyEscrow > 0);
 
         // Check if the ticket won
         require(uint256(keccak256(ticketHash, _rand)) % 100 <= _winProb);
 
-        if (deposits[creator] < _faceValue) {
+        if (creator.deposit < _faceValue) {
             // Slash creator's penalty escrow if deposit cannot cover ticket value
-            penaltyEscrows[creator] = 0;
+            creator.penaltyEscrow = 0;
+            // Zero out deposit
+            creator.deposit = 0;
+        } else {
+            // Deduct deposit
+            creator.deposit = creator.deposit.sub(_faceValue);
         }
 
-        uint256 amount = Math.min256(deposits[creator], _faceValue);
-        _recipient.transfer(amount);
+        token.transfer(_recipient, _faceValue);
     }
 
     function personalHashMsg(bytes32 _msg) internal pure returns (bytes32) {
